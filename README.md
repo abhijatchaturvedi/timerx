@@ -1,7 +1,7 @@
 # timerx
 
-[![PyPI](https://img.shields.io/pypi/v/timerx.svg)](https://pypi.org/project/timerx/)
-[![Python](https://img.shields.io/pypi/pyversions/timerx.svg)](https://pypi.org/project/timerx/)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-%3E%3D3.10-blue.svg)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-28%20passing-brightgreen.svg)](tests/test_timerx.py)
 [![Dependencies](https://img.shields.io/badge/runtime%20deps-zero-brightgreen.svg)](pyproject.toml)
