@@ -6,9 +6,23 @@
 [![Tests](https://img.shields.io/badge/tests-28%20passing-brightgreen.svg)](tests/test_timerx.py)
 [![Dependencies](https://img.shields.io/badge/runtime%20deps-zero-brightgreen.svg)](pyproject.toml)
 
-Tiny dependency-free timing utilities for Python. Use it as a decorator, context
-manager, or named stopwatch, then inspect cumulative stats or print a compact
+timerx is a tiny, dependency-free timing utility for Python. It gives you one
+simple API for timing functions, code blocks, and named stopwatches, then keeps
+cumulative stats so you can inspect timings programmatically or print a compact
 summary.
+
+Use it when you want quick timing information without setting up a profiler or
+manually calling `time.perf_counter()` throughout your code.
+
+## Features
+
+- Works as a decorator, context manager, or manual stopwatch
+- Supports sync and async functions
+- Accumulates count, total, average, min, max, and last duration
+- Records timings even when decorated functions or context blocks raise
+- Supports concurrent named stopwatches
+- Provides isolated `TimerX()` instances for libraries and tests
+- Uses only the Python standard library at runtime
 
 ## Install
 
@@ -23,81 +37,112 @@ pip install -e ".[test]"
 pytest
 ```
 
-## Quick Start
+## Quick Example
+
+This example shows the three main ways to use timerx: decorate a function,
+measure a block, and manually start and stop a named timer.
 
 ```python
+import time
 import timerx
 
 
 @timerx.track
 def train_model():
-    ...
+    time.sleep(0.2)
 
 
-@timerx.track(name="custom_step")
-def transform():
-    ...
-
+train_model()
+train_model()
 
 with timerx.lap("preprocessing"):
-    ...
-
+    time.sleep(0.05)
 
 timerx.start("postprocess")
-...
+time.sleep(0.01)
 elapsed = timerx.stop("postprocess")
 
-print(elapsed)
+print(f"postprocess took {elapsed:.4f}s")
 print(timerx.summary())
 ```
 
-## Decorator
+Example summary:
 
-`track` works with or without parentheses and supports sync and async functions.
-It records calls that return normally and calls that raise.
+```text
+name           count  total     avg       min       max       last
+-------------  -----  --------  --------  --------  --------  --------
+train_model    2      400ms     200ms     200ms     200ms     200ms
+preprocessing  1      50ms      50ms      50ms      50ms      50ms
+postprocess    1      10ms      10ms      10ms      10ms      10ms
+```
+
+## Timing Functions
+
+Use `@timerx.track` when you want to measure every call to a function. It works
+with or without parentheses. By default, the function name is used as the timing
+label, but you can provide a custom name.
 
 ```python
 @timerx.track
-def sync_work():
-    ...
+def load_data():
+    return [1, 2, 3]
 
 
 @timerx.track()
-def also_sync_work():
-    ...
+def preprocess():
+    return "ready"
 
 
-@timerx.track(name="fetch")
-async def async_work():
-    ...
+@timerx.track(name="model.fit")
+def train():
+    return "done"
 ```
 
-Stats accumulate across calls:
+Stats accumulate across multiple calls:
 
 ```python
-sync_work()
-sync_work()
+load_data()
+load_data()
 
 stats = timerx.get_stats()
-print(stats["sync_work"]["count"])
-print(stats["sync_work"]["avg"])
+print(stats["load_data"]["count"])  # 2
+print(stats["load_data"]["avg"])    # average duration in seconds
 ```
 
-## Laps
+Decorated functions are recorded even if they raise an exception, and the
+original exception is still raised normally.
 
-`lap` records a named block. It records in `finally`, so exceptions are included,
-and nested laps work naturally.
+## Timing Async Functions
+
+`track` also supports coroutine functions.
 
 ```python
-with timerx.lap("outer"):
-    with timerx.lap("inner"):
-        ...
+@timerx.track(name="fetch")
+async def fetch_rows():
+    return await client.get("/rows")
+```
+
+## Timing Code Blocks
+
+Use `timerx.lap(name)` as a context manager when you want to measure part of a
+function. Laps record timings even when the block raises, and nested laps work
+naturally.
+
+```python
+with timerx.lap("pipeline"):
+    with timerx.lap("load"):
+        rows = load_rows()
+
+    with timerx.lap("transform"):
+        rows = transform(rows)
 ```
 
 ## Stopwatches
 
-Named stopwatches can run concurrently. Multiple starts with the same name are
-stacked, so each `stop(name)` closes the most recent start.
+Use `start(name)` and `stop(name)` when the start and end of the work are in
+different places. Named stopwatches can run concurrently. If you start the same
+name more than once, timerx treats it as a stack, so `stop(name)` closes the most
+recent start.
 
 ```python
 timerx.start("download")
@@ -107,29 +152,27 @@ timerx.stop("parse")
 timerx.stop("download")
 ```
 
-## Summaries
+`stop(name)` returns the elapsed duration in seconds and also records it in the
+same stats store used by decorators and laps.
+
+## Reading Results
+
+Use `summary()` for human-readable output:
 
 ```python
 print(timerx.summary())
 print(timerx.summary(unit="ms"))
 ```
 
-Supported units are `auto`, `s`, `ms`, `us`, and `µs`. Auto mode picks seconds,
-milliseconds, or microseconds per value.
+Supported units are `auto`, `s`, `ms`, `us`, and `microseconds`. Auto mode picks
+seconds, milliseconds, or microseconds per value.
 
-Example output:
-
-```text
-name           count  total    avg      min      max      last
--------------  -----  -------  -------  -------  -------  -------
-preprocessing  1      5.12ms   5.12ms   5.12ms   5.12ms   5.12ms
-```
-
-## Programmatic Stats
-
-`get_stats()` returns plain dictionaries:
+Use `get_stats()` when you need data for tests, logs, dashboards, or your own
+formatting:
 
 ```python
+stats = timerx.get_stats()
+
 {
     "preprocessing": {
         "count": 1,
@@ -142,10 +185,13 @@ preprocessing  1      5.12ms   5.12ms   5.12ms   5.12ms   5.12ms
 }
 ```
 
+Durations in `get_stats()` are always stored as seconds.
+
 ## Isolated Instances
 
-Use `TimerX()` when building libraries or tests that should not write into
-timerx's global state.
+The top-level `timerx.track`, `timerx.lap`, `timerx.start`, and `timerx.stop`
+helpers share one global timer. For libraries, tests, or applications that need
+separate timing state, create a `TimerX()` instance.
 
 ```python
 from timerx import TimerX
@@ -153,9 +199,17 @@ from timerx import TimerX
 tx = TimerX()
 
 with tx.lap("local"):
-    ...
+    run_work()
 
 print(tx.get_stats())
+```
+
+## Resetting
+
+Use `reset()` to clear recorded timings and running stopwatches.
+
+```python
+timerx.reset()
 ```
 
 ## Development
