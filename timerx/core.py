@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import functools
 import inspect
+import threading
 import time
 from collections.abc import Callable
-from contextlib import ContextDecorator
 from dataclasses import dataclass
 from typing import Any, TypeVar, overload
 
 F = TypeVar("F", bound=Callable[..., Any])
+
+_VALID_UNITS = frozenset({"auto", "s", "ms", "us", "µs", "microseconds"})
+_VALID_SORT_KEYS = frozenset({"count", "total", "avg", "min", "max", "last"})
 
 
 @dataclass
@@ -33,14 +36,14 @@ class _Record:
         return {
             "count": self.count,
             "total": self.total,
-            "min": self.min or 0.0,
-            "max": self.max or 0.0,
+            "min": self.min if self.min is not None else 0.0,
+            "max": self.max if self.max is not None else 0.0,
             "last": self.last,
             "avg": average,
         }
 
 
-class _Lap(ContextDecorator):
+class _Lap:
     def __init__(self, timer: "TimerX", name: str) -> None:
         self._timer = timer
         self._name = name
@@ -53,7 +56,9 @@ class _Lap(ContextDecorator):
     def __exit__(self, *exc_info: object) -> bool:
         if self._started is None:
             raise RuntimeError("timerx lap exited before it was entered")
-        self._timer._record(self._name, self._timer._clock() - self._started)
+        elapsed = self._timer._clock() - self._started
+        with self._timer._lock:
+            self._timer._record(self._name, elapsed)
         return False
 
 
@@ -68,14 +73,13 @@ class TimerX:
         self._clock = clock or time.perf_counter
         self._records: dict[str, _Record] = {}
         self._running: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
 
     @overload
-    def track(self, func: F, /) -> F:
-        ...
+    def track(self, func: F, /) -> F: ...
 
     @overload
-    def track(self, func: None = None, /, *, name: str | None = None) -> Callable[[F], F]:
-        ...
+    def track(self, func: None = None, /, *, name: str | None = None) -> Callable[[F], F]: ...
 
     def track(
         self, func: F | None = None, /, *, name: str | None = None
@@ -87,6 +91,8 @@ class TimerX:
         """
 
         def decorate(target: F) -> F:
+            if name is not None and not name:
+                raise ValueError("timerx track name must not be empty")
             label = name or target.__name__
 
             if inspect.iscoroutinefunction(target):
@@ -97,7 +103,9 @@ class TimerX:
                     try:
                         return await target(*args, **kwargs)
                     finally:
-                        self._record(label, self._clock() - started)
+                        elapsed = self._clock() - started
+                        with self._lock:
+                            self._record(label, elapsed)
 
                 return async_wrapper  # type: ignore[return-value]
 
@@ -107,7 +115,9 @@ class TimerX:
                 try:
                     return target(*args, **kwargs)
                 finally:
-                    self._record(label, self._clock() - started)
+                    elapsed = self._clock() - started
+                    with self._lock:
+                        self._record(label, elapsed)
 
             return wrapper  # type: ignore[return-value]
 
@@ -131,70 +141,86 @@ class TimerX:
 
         if not name:
             raise ValueError("timerx stopwatch name must not be empty")
-        self._running.setdefault(name, []).append(self._clock())
+        t = self._clock()
+        with self._lock:
+            self._running.setdefault(name, []).append(t)
 
     def stop(self, name: str) -> float:
         """Stop a named stopwatch and return elapsed seconds."""
 
         try:
-            stack = self._running[name]
+            with self._lock:
+                stack = self._running[name]
+                started = stack.pop()
+                if not stack:
+                    del self._running[name]
         except KeyError as exc:
             raise KeyError(f"timerx stopwatch {name!r} was not started") from exc
-
-        started = stack.pop()
-        if not stack:
-            del self._running[name]
         elapsed = self._clock() - started
-        self._record(name, elapsed)
+        with self._lock:
+            self._record(name, elapsed)
         return elapsed
 
     def get_stats(self) -> dict[str, dict[str, float | int]]:
         """Return a plain dictionary of accumulated timing statistics."""
 
-        return {name: record.as_dict() for name, record in self._records.items()}
+        with self._lock:
+            return {name: record.as_dict() for name, record in self._records.items()}
 
-    def summary(self, unit: str = "auto") -> str:
-        """Return a formatted text table of accumulated timings."""
+    def summary(self, unit: str = "auto", sort_by: str | None = None) -> str:
+        """Return a formatted text table of accumulated timings.
 
-        if unit not in {"auto", "s", "ms", "us", "µs"}:
-            raise ValueError("unit must be one of: auto, s, ms, us, µs")
-        if not self._records:
-            return "timerx: no timings recorded"
+        ``sort_by`` accepts any stat column name: count, total, avg, min, max,
+        last. Rows are sorted descending by that column. Default is insertion
+        order.
+        """
 
-        rows = []
-        for name, stats in self.get_stats().items():
-            rows.append(
-                [
-                    name,
-                    str(stats["count"]),
-                    self._format(float(stats["total"]), unit),
-                    self._format(float(stats["avg"]), unit),
-                    self._format(float(stats["min"]), unit),
-                    self._format(float(stats["max"]), unit),
-                    self._format(float(stats["last"]), unit),
-                ]
-            )
+        if unit not in _VALID_UNITS:
+            raise ValueError("unit must be one of: auto, s, ms, us, µs, microseconds")
+        if sort_by is not None and sort_by not in _VALID_SORT_KEYS:
+            raise ValueError("sort_by must be one of: count, total, avg, min, max, last")
+
+        with self._lock:
+            if not self._records:
+                return "timerx: no timings recorded"
+            stats_list = [(name, record.as_dict()) for name, record in self._records.items()]
+
+        if sort_by is not None:
+            stats_list.sort(key=lambda item: item[1][sort_by], reverse=True)  # type: ignore[arg-type]
+
+        rows: list[list[str]] = []
+        for name, stats in stats_list:
+            rows.append([
+                name,
+                str(stats["count"]),
+                self._format(float(stats["total"]), unit),
+                self._format(float(stats["avg"]), unit),
+                self._format(float(stats["min"]), unit),
+                self._format(float(stats["max"]), unit),
+                self._format(float(stats["last"]), unit),
+            ])
 
         headers = ["name", "count", "total", "avg", "min", "max", "last"]
         widths = [
-            max(len(str(row[index])) for row in [headers, *rows])
-            for index in range(len(headers))
+            max(len(row[i]) for row in [headers, *rows])
+            for i in range(len(headers))
         ]
-        lines = [
-            "  ".join(value.ljust(widths[index]) for index, value in enumerate(headers)),
-            "  ".join("-" * width for width in widths),
-        ]
-        lines.extend(
-            "  ".join(value.ljust(widths[index]) for index, value in enumerate(row))
-            for row in rows
-        )
+
+        def _fmt_row(row: list[str]) -> str:
+            parts = [row[0].ljust(widths[0])]
+            parts += [row[i].rjust(widths[i]) for i in range(1, len(headers))]
+            return "  ".join(parts)
+
+        lines = [_fmt_row(headers), "  ".join("-" * w for w in widths)]
+        lines.extend(_fmt_row(row) for row in rows)
         return "\n".join(lines)
 
     def reset(self) -> None:
         """Clear all recorded and running timings."""
 
-        self._records.clear()
-        self._running.clear()
+        with self._lock:
+            self._records.clear()
+            self._running.clear()
 
     def _record(self, name: str, elapsed: float) -> None:
         self._records.setdefault(name, _Record()).add(elapsed)

@@ -162,10 +162,14 @@ Use `summary()` for human-readable output:
 ```python
 print(timerx.summary())
 print(timerx.summary(unit="ms"))
+print(timerx.summary(sort_by="total"))  # most expensive first
 ```
 
-Supported units are `auto`, `s`, `ms`, `us`, and `microseconds`. Auto mode picks
-seconds, milliseconds, or microseconds per value.
+Supported units are `auto`, `s`, `ms`, `us`, `µs`, and `microseconds`. Auto mode
+picks seconds, milliseconds, or microseconds per value.
+
+Pass `sort_by` with any stat column name (`count`, `total`, `avg`, `min`, `max`,
+`last`) to sort rows descending by that column. Default is insertion order.
 
 Use `get_stats()` when you need data for tests, logs, dashboards, or your own
 formatting:

@@ -94,6 +94,14 @@ class TestTrackDecorator:
         assert work.__name__ == "work"
         assert work.__doc__ == "docstring"
 
+    def test_track_rejects_empty_name(self) -> None:
+        tx = TimerX()
+
+        with pytest.raises(ValueError):
+            @tx.track(name="")
+            def work() -> None:
+                pass
+
 
 class TestAsyncTrack:
     def test_track_records_async_call(self) -> None:
@@ -278,9 +286,46 @@ class TestSummaryAndStats:
 
         assert "2µs" in tx.summary(unit="us")
 
+    def test_summary_supports_microseconds_spelled_out(self) -> None:
+        clock = FakeClock()
+        tx = TimerX(clock=clock)
+        tx.start("job")
+        clock.advance(0.000002)
+        tx.stop("job")
+
+        assert "2µs" in tx.summary(unit="microseconds")
+
     def test_summary_rejects_unknown_unit(self) -> None:
         with pytest.raises(ValueError):
             TimerX().summary(unit="minutes")
+
+    def test_summary_sort_by_total(self) -> None:
+        clock = FakeClock()
+        tx = TimerX(clock=clock)
+        tx.start("fast")
+        clock.advance(0.1)
+        tx.stop("fast")
+        tx.start("slow")
+        clock.advance(0.5)
+        tx.stop("slow")
+
+        lines = tx.summary(sort_by="total").splitlines()
+        assert lines[2].startswith("slow")
+        assert lines[3].startswith("fast")
+
+    def test_summary_rejects_invalid_sort_by(self) -> None:
+        with pytest.raises(ValueError):
+            TimerX().summary(sort_by="unknown")
+
+    def test_summary_right_aligns_numeric_columns(self) -> None:
+        clock = FakeClock()
+        tx = TimerX(clock=clock)
+        with tx.lap("job"):
+            pass
+
+        data_line = tx.summary().splitlines()[2]
+        # "count" header is 5 chars wide; value "1" right-aligned gives "    1"
+        assert "    1" in data_line
 
     def test_reset_clears_records_and_running_stopwatches(self) -> None:
         tx = TimerX()
