@@ -148,6 +148,7 @@ class TimerX:
     def stop(self, name: str) -> float:
         """Stop a named stopwatch and return elapsed seconds."""
 
+        t = self._clock()
         try:
             with self._lock:
                 stack = self._running[name]
@@ -156,7 +157,7 @@ class TimerX:
                     del self._running[name]
         except KeyError as exc:
             raise KeyError(f"timerx stopwatch {name!r} was not started") from exc
-        elapsed = self._clock() - started
+        elapsed = t - started
         with self._lock:
             self._record(name, elapsed)
         return elapsed
@@ -225,10 +226,10 @@ class TimerX:
     def _record(self, name: str, elapsed: float) -> None:
         self._records.setdefault(name, _Record()).add(elapsed)
 
-    @classmethod
-    def _format(cls, seconds: float, unit: str) -> str:
+    @staticmethod
+    def _format(seconds: float, unit: str) -> str:
         if unit == "auto":
-            unit = cls._auto_unit(seconds)
+            unit = TimerX._auto_unit(seconds)
         if unit == "s":
             return f"{seconds:.6g}s"
         if unit == "ms":
