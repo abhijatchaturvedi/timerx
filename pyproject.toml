@@ -39,9 +39,9 @@ dependencies = []
 test = ["pytest>=8"]
 
 [project.urls]
-Homepage = "https://github.com/abhijat-chaturvedi/timerx"
-Repository = "https://github.com/abhijat-chaturvedi/timerx"
-Issues = "https://github.com/abhijat-chaturvedi/timerx/issues"
+Homepage = "https://github.com/abhijatchaturvedi/timerx"
+Repository = "https://github.com/abhijatchaturvedi/timerx"
+Issues = "https://github.com/abhijatchaturvedi/timerx/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["timerx"]
